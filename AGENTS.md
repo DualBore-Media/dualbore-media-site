@@ -13,3 +13,5 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - The selected visual direction is the dark garage editorial concept: orange accents, large display type, real channel links, and illustrative build cards.
 - The brother-provided merch HTML is a source reference for the future shop. Current merch is a preview only; do not enable live checkout until products, prices, shipping, tax, fulfillment, and policies are confirmed.
 - Stripe must remain test mode during development. Keep the browser publishable key in a local environment file only; never commit a secret `sk_` key.
+- Merch is an editorial Drop 01 preview: E92 Tee (`/assets/IMG_5076.jpg`), E90 Crewneck (`/assets/IMG_5077.jpg`), and SV1000S Silhouette (`/assets/IMG_5078.jpg`). Use the supplied mockups without invented material specifications, prices, stock, or checkout controls. Drop alerts link to the confirmed YouTube channel.
+- Netlify builds the application root (`site/` locally) with `npm run build` and publishes `dist/client`. Keep `public/_redirects` as the SPA fallback.
