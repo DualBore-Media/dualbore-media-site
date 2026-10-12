@@ -10,8 +10,9 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 
 ## Durable project decisions
 
-- The selected visual direction is the dark garage editorial concept: orange accents, large display type, real channel links, and illustrative build cards.
+- The current selected visual direction is the high-octane carbon-fiber identity from the brother-provided HTML: #0B0D10 background, #13161C cards, #232834 borders, #FF2A3B red and #00F0FF cyan, Teko 600/700 display titles and Inter body text. Use real channel thumbnails for vehicle cards and keep verified YouTube links. This supersedes the earlier orange/Anton/Barlow concept.
 - The brother-provided merch HTML is a source reference for the future shop. Current merch is a preview only; do not enable live checkout until products, prices, shipping, tax, fulfillment, and policies are confirmed.
 - Stripe must remain test mode during development. Keep the browser publishable key in a local environment file only; never commit a secret `sk_` key.
-- Merch is an editorial Drop 01 preview: E92 Tee (`/assets/IMG_5076.jpg`), E90 Crewneck (`/assets/IMG_5077.jpg`), and SV1000S Silhouette (`/assets/IMG_5078.jpg`). Use the supplied mockups without invented material specifications, prices, stock, or checkout controls. Drop alerts link to the confirmed YouTube channel.
+- Merch is an editorial Drop 01 preview, labeled Coming soon: E92 Coupe Line-Art Tee (`/assets/IMG_5076.jpg`), E90 Sedan Front-Clip Crewneck (`/assets/IMG_5077.jpg`), and SV1000S Silhouette Crewneck (`/assets/IMG_5078.jpg`). Use the supplied mockups without invented material specifications, prices, stock, or checkout controls. The Drop 01 Alert dialog links to the confirmed YouTube channel; do not collect email addresses or simulate signup.
 - Netlify builds the application root (`site/` locally) with `npm run build` and publishes `dist/client`. Keep `public/_redirects` as the SPA fallback.
+
