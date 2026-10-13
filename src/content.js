@@ -5,10 +5,10 @@ export const channel = {
 };
 
 export const views = [
-  { id: 'garage', label: 'Garage Builds', short: 'The garage', number: '01' },
-  { id: 'vault', label: 'Video Vault', short: 'Video vault', number: '02' },
-  { id: 'merch', label: 'Garage Merch (Drop 01)', short: 'Drop 01', number: '03' },
-  { id: 'crew', label: 'About / Pit Crew', short: 'Pit crew', number: '04' },
+  { id: 'garage', label: 'Garage Builds', short: 'Garage Builds', number: '01' },
+  { id: 'vault', label: 'Video Vault', short: 'Video Vault', number: '02' },
+  { id: 'merch', label: 'Garage Merch (Drop 01)', short: 'Drop 01 Merch', number: '03' },
+  { id: 'crew', label: 'About / Pit Crew', short: 'Pit Crew', number: '04' },
 ];
 export const filters = ['All', 'Turbo Cars', 'V-Twins', 'Two-Strokes', 'Pit Bikes'];
 

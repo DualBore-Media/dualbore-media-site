@@ -20,12 +20,48 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 
 ## Durable project decisions
 
+### Current sandbox implementation decisions
+
+- Continue from the approved local storefront. The user authorized a source-only GitHub development branch backup. Exclude QA artifacts, screenshots and secrets. Do not deploy, trigger previews/build hooks, merge main, add a deploy marker or mutate remote account settings.
+- Local sandbox Checkout Sessions, verified raw Stripe webhooks, PostgreSQL order/inventory persistence, transactional Resend confirmations and mocked end-to-end tests are now authorized. This supersedes the earlier local no-Stripe integration restriction only for this sandbox stage. Normal builds remain Coming soon; all commerce HTTP handlers refuse hosted/Netlify requests.
+- Credentials are server-only; hosted Checkout needs no publishable key. Test/restricted-test keys only. No real credentials or real Stripe CLI/server PostgreSQL were available during this implementation. Report mock tests separately from real sandbox E2E.
+- Prices/stock/shipping/tax/order status come from trusted server state. Existing stable SKUs remain. Test seeding is explicit and never resets existing stock. Reservations are transactional; ambiguous Stripe creation and recovery failures retain stock pending verified recovery. Never release solely on local expiration.
+- PostgreSQL repository uses one global transaction advisory lock for correctness at low volume. PGlite tests omit this unsupported call; real multi-process PostgreSQL locking remains an external check. All database writes must use the repository.
+- Stripe paid events drive orders, sold inventory and email. Success URLs are not payment proof. Order status requires a session-only access token and returns minimal data. Local simulator clearly discloses that no Stripe payment is verified or email sent.
+- Preserve waitlist marketing consent separately from orders. Draft legal policies and test catalog must block check:launch. Preserve existing Sites outputs and deployment gates.
+- Run all tests, normal build, client-secret scan, local browser suites and the intentionally failing launch check before handoff. Keep real credentials, databases, .tools, dist and node_modules out of Git.
+
+### Latest authorization: local sandbox commerce integration
+
+- The user explicitly authorized building the commerce foundation locally in test mode, without pushing or deploying. This supersedes the earlier no-cart/no-price instruction only for the local commerce preview. Normal builds remain Coming soon and waitlist-only.
+- Use the existing three designs and provisional S-2XL range: 15 stable variant IDs/SKUs. Test prices are $30 each and one $7 USA shipping charge per order, per the user's confirmed values. No invented stock or garment measurements.
+- Run `npm run dev:commerce` to expose the cart and server estimate on loopback only. The quote API accepts variant IDs, integer quantities and US destination only, and rejects client-supplied prices. It never creates a payment session, order or inventory reservation.
+- Keep the waitlist and Resend event flow intact. No external Stripe account mutations, keys, real purchases, database provisioning, push, PR, or deployment are authorized for this stage.
+- Checkout Sessions, verified Stripe webhooks, durable/idempotent order storage, inventory policy, tax registrations and customer policies are required future stages before accepting payments. The cart is not evidence of paid orders or stock availability.
+- The latest attachment guides a local storefront completeness pass before Stripe: editorial garage/merch presentation, responsive editable cart drawer, clearly labeled stock/error fixtures, draft customer policy routes and simulated order-state screens. Preserve carts on unverified order screens. Footer acquisition opens the existing explicit-consent waitlist. These features are loopback commerce-mode only; no Stripe integration or external mutations.
+- Verify `npm run test:commerce`, the existing email/Sites/client-secret suites, a normal build, and the local commerce preview. Preserve the deployment approval gate.
+
+### Previous stage: Resend waitlist, retained for normal builds
+
+- The user's latest brief supersedes earlier commerce and automatic-publishing requests. Keep merch Coming soon, with no prices, Stripe checkout, cart, inventory, orders, accounts, or invented garment specifications. Previously created Stripe sandbox objects are not connected to this version.
+- Preserve the existing `drop-waitlist` Netlify Form and its fields: name, email, style, size, consent, and bot-field. Netlify Forms is the source of truth. A confirmation email failure must never change the browser's accepted-signup state.
+- Email runs only in the modern Netlify `formSubmitted` platform-event handler. Netlify verifies its event signature. No public email-sending HTTP endpoint. Validate the intended form, email, consent, allowed style/size, and honeypot on the server too.
+- Secrets belong in Netlify environment variables, never `src/`, `public/`, HTML, committed environment files, or any `VITE_` variable. Use `RESEND_API_KEY`, `RESEND_FROM`, optional `RESEND_REPLY_TO`, and optional `RESEND_NOTIFY_TO`. Do not invent a sender domain. Missing configuration skips email safely.
+- Never deploy, publish, trigger a build hook, merge/push changes to production `main`, or create a Deploy Preview without approval for that exact version. Prior approvals are superseded. Approval is single-use. Before deployment report changes, local test/build results, and the exact branch/commit; ask: "Do you want me to deploy this version to production?"
+- Normal development commit subjects include `[skip netlify]`. Never add `[deploy netlify]` without explicit approval for that specific production version. `scripts/netlify-ignore.mjs` cancels Git builds unless the current production/main commit subject has the approved marker. `prebuild` rechecks hosted builds because Netlify build hooks bypass ignore commands. Do not create another deployment path.
+- A local build is authorized and does not authorize publication. Run `npm ci`, `npm run test:email`, `npm run build`, `npm run test:sites`, and `npm run test:client-secrets`. Preserve all existing Sites packaging files.
+- Retain the four existing views and accessibility behavior. The pending mobile/copy improvements from earlier instructions may remain; do not introduce a new visual redesign as part of email integration.
+
 - The current selected visual direction is the high-octane carbon-fiber identity from the brother-provided HTML: #0B0D10 background, #13161C cards, #232834 borders, #FF2A3B red and #00F0FF cyan, Teko 600/700 display titles and Inter body text. Use real channel thumbnails for vehicle cards and keep verified YouTube links. This supersedes the earlier orange/Anton/Barlow concept.
 - The brother-provided merch HTML is a source reference for the future shop. Current merch is a preview only; do not enable live checkout until products, prices, shipping, tax, fulfillment, and policies are confirmed.
 - Stripe must remain test mode during development. Keep the browser publishable key in a local environment file only; never commit a secret `sk_` key.
 - Merch is an editorial Drop 01 preview, labeled Coming soon: E92 Coupe Line-Art Tee (`/assets/IMG_5076.jpg`), E90 Sedan Front-Clip Crewneck (`/assets/IMG_5077.jpg`), and SV1000S Silhouette Crewneck (`/assets/IMG_5078.jpg`). Use the supplied mockups without invented material specifications, prices, stock, or checkout controls. The user has now authorized a real Netlify Forms Drop 01 waitlist. Collect only name, email, style, size, and explicit email consent. Never simulate signup success.
 - Netlify builds the application root (`site/` locally) with `npm run build` and publishes `dist/client`. Keep `public/_redirects` as the SPA fallback.
+
+
 - Navigation uses four hash-addressable, keyboard-accessible tabs: Garage Builds, Video Vault, Garage Merch (Drop 01), and About / Pit Crew. Preserve legacy films/shop/about hash aliases. Arrow keys and Home/End move and activate tabs.
 - Merch Quick Views show supplied artwork, design notes, and a clearly provisional S–2XL size guide. Do not invent garment measurements or material weights. Get Drop Alert uses Netlify Forms, with validation, a honeypot, and success only after an accepted submission. No payment collection.
 - Public production is approved; keep non-production previews private. Keep static response security headers in public/_headers.
+
+
 - Resend email must run server-side only. Never expose `RESEND_API_KEY` through a `VITE_` variable or client bundle. Netlify Forms remains the source of truth for accepted Drop 01 signups; Resend may send confirmations/notifications after Netlify verifies a form submission.
