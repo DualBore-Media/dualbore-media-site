@@ -8,6 +8,16 @@ When implementing from a selected generated mock, treat that image as the source
 
 Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts/prepare-sites-build.mjs`, and `tests/sites-worker.test.mjs` intact so the same local prototype can be handed to Sites. Before a Sites handoff, run `npm run build` and `npm run test:sites`; the build must leave `dist/client/index.html`, `dist/server/index.js`, and `dist/.openai/hosting.json`.
 
+## Deployment approval gate
+
+- Local development, local builds, and local tests are allowed without additional approval.
+- Do not publish, deploy, trigger a Netlify build hook, call a Netlify deploy API/CLI command, merge a deployment commit, or otherwise make a new build live unless the user explicitly approves that specific deployment in the current conversation.
+- Treat deployment approval as single-use. Approval to implement, edit, test, commit, or review code is not approval to deploy it.
+- Before an approved production deployment, summarize the changes and test status, name the target branch/commit, and wait for an explicit instruction such as `deploy it`, `push it live`, or equivalent.
+- Normal GitHub commits must include `[skip netlify]` in the commit message so continuous deployment does not consume a build.
+- The repository Netlify build gate only permits a Git-triggered build when the current commit message contains `[deploy netlify]`. Codex must never add that marker unless the user explicitly approved that specific deployment.
+- Do not use a build hook, manual Netlify deploy, Netlify API deploy, Netlify CLI deploy, or agent-generated Deploy Preview to bypass this gate without the same explicit approval.
+
 ## Durable project decisions
 
 - The current selected visual direction is the high-octane carbon-fiber identity from the brother-provided HTML: #0B0D10 background, #13161C cards, #232834 borders, #FF2A3B red and #00F0FF cyan, Teko 600/700 display titles and Inter body text. Use real channel thumbnails for vehicle cards and keep verified YouTube links. This supersedes the earlier orange/Anton/Barlow concept.
@@ -15,9 +25,7 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - Stripe must remain test mode during development. Keep the browser publishable key in a local environment file only; never commit a secret `sk_` key.
 - Merch is an editorial Drop 01 preview, labeled Coming soon: E92 Coupe Line-Art Tee (`/assets/IMG_5076.jpg`), E90 Sedan Front-Clip Crewneck (`/assets/IMG_5077.jpg`), and SV1000S Silhouette Crewneck (`/assets/IMG_5078.jpg`). Use the supplied mockups without invented material specifications, prices, stock, or checkout controls. The user has now authorized a real Netlify Forms Drop 01 waitlist. Collect only name, email, style, size, and explicit email consent. Never simulate signup success.
 - Netlify builds the application root (`site/` locally) with `npm run build` and publishes `dist/client`. Keep `public/_redirects` as the SPA fallback.
-
-
 - Navigation uses four hash-addressable, keyboard-accessible tabs: Garage Builds, Video Vault, Garage Merch (Drop 01), and About / Pit Crew. Preserve legacy films/shop/about hash aliases. Arrow keys and Home/End move and activate tabs.
 - Merch Quick Views show supplied artwork, design notes, and a clearly provisional S–2XL size guide. Do not invent garment measurements or material weights. Get Drop Alert uses Netlify Forms, with validation, a honeypot, and success only after an accepted submission. No payment collection.
 - Public production is approved; keep non-production previews private. Keep static response security headers in public/_headers.
-
+- Resend email must run server-side only. Never expose `RESEND_API_KEY` through a `VITE_` variable or client bundle. Netlify Forms remains the source of truth for accepted Drop 01 signups; Resend may send confirmations/notifications after Netlify verifies a form submission.
