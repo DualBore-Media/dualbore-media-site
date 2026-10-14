@@ -37,7 +37,7 @@ function SectionTitle({ eyebrow, title, accent, children }) {
 export function App() {
   const cart = useTestCart();
   const [cartOpen,setCartOpen]=useState(false);
-  const [page,setPage]=useState(()=>testCommerceEnabled?readPage():null);
+  const [page,setPage]=useState(()=>{const p=readPage();return testCommerceEnabled||p&&!p.startsWith('order/')?p:null;});
   const [view, setView] = useState(readView);
   const [menu, setMenu] = useState(false);
   const [filter, setFilter] = useState('All');
@@ -79,7 +79,7 @@ export function App() {
   const openCart=()=>{if(modal)closeModal();setMenu(false);setCartOpen(true);};
   useEffect(()=>{
     document.body.classList.toggle('local-storefront',testCommerceEnabled);
-    const onPop=()=>setPage(testCommerceEnabled?readPage():null);
+    const onPop=()=>{const p=readPage();setPage(testCommerceEnabled||p&&!p.startsWith('order/')?p:null);};
     window.addEventListener('popstate',onPop);
     return()=>{document.body.classList.remove('local-storefront');window.removeEventListener('popstate',onPop);};
   },[]);
@@ -119,11 +119,11 @@ export function App() {
     <a className="skip-link" href="#content" onClick={event => { event.preventDefault(); panelTop.current?.focus(); }}>Skip to content</a>
     <header className={`header${testCommerceEnabled ? ' commerce-header' : ''}`} onClick={event => { if (event.target.closest('a')) setMenu(false); }}>
       <button className="brand" onClick={() => chooseView('garage', true)} aria-label="DualBore Media home"><img className="brand-logo" src="/assets/channel-logo.jpg" alt="DualBore Media Logo" width="48" height="48" loading="eager" fetchPriority="high" /><span><strong>DUALBORE<span>MEDIA</span></strong><small>BUILT. RIDDEN. REPEAT.</small></span></button>
-      <div className="header-meta"><ExhaustEmblem /><span className="status-dot" /> Independent builds & rides</div>
+      <div className="header-meta"><ExhaustEmblem /><a className="text-link" href="/account">My Garage</a></div>
       {testCommerceEnabled && <button className="cart-toggle" aria-label={`Open test cart, ${cart.count} items`} onClick={openCart}><FaBagShopping aria-hidden="true"/> <span>{cart.count}</span></button>}
       <External href={channel.url} label="Visit DualBore Media on YouTube to subscribe" className="button subscribe"><FaYoutube aria-hidden="true" /> Subscribe</External>
       <button ref={menuButton} className="menu-toggle" aria-label={menu ? 'Close navigation' : 'Open navigation'} aria-expanded={menu} aria-controls="mobile-navigation" onClick={() => setMenu(!menu)}>{menu ? <FaXmark /> : <FaBars />}</button>
-      <button className={`drawer-backdrop${menu ? ' is-open' : ''}`} aria-label="Close navigation overlay" tabIndex={menu ? 0 : -1} aria-hidden={!menu} onClick={() => { setMenu(false); menuButton.current?.focus(); }} /><nav id="mobile-navigation" className={`mobile-drawer${menu ? ' is-open' : ''}`} aria-label="Mobile navigation" inert={!menu}>{views.map(item => <button key={item.id} aria-current={view === item.id ? 'page' : undefined} onClick={() => chooseView(item.id, true)}><span>{item.number}</span>{item.label}<FaArrowRight aria-hidden="true" /></button>)}<External className="drawer-channel" href={channel.url} label="Subscribe to DualBore Media on YouTube"><FaYoutube aria-hidden="true" /> YouTube channel <FaArrowUpRightFromSquare aria-hidden="true" /></External></nav>
+      <button className={`drawer-backdrop${menu ? ' is-open' : ''}`} aria-label="Close navigation overlay" tabIndex={menu ? 0 : -1} aria-hidden={!menu} onClick={() => { setMenu(false); menuButton.current?.focus(); }} /><nav id="mobile-navigation" className={`mobile-drawer${menu ? ' is-open' : ''}`} aria-label="Mobile navigation" inert={!menu}>{views.map(item => <button key={item.id} aria-current={view === item.id ? 'page' : undefined} onClick={() => chooseView(item.id, true)}><span>{item.number}</span>{item.label}<FaArrowRight aria-hidden="true" /></button>)}<a className="drawer-channel" href="/account">My Garage <FaArrowRight aria-hidden="true"/></a><External className="drawer-channel" href={channel.url} label="Subscribe to DualBore Media on YouTube"><FaYoutube aria-hidden="true" /> YouTube channel <FaArrowUpRightFromSquare aria-hidden="true" /></External></nav>
     </header>
 
     <div className="workspace-nav" hidden={!!page}><div className="tabs" role="tablist" aria-label="Explore DualBore Media">{views.map((item, index) => {
@@ -132,7 +132,7 @@ export function App() {
     })}</div></div>
 
     <main id="content" ref={panelTop} tabIndex="-1">
-      {page&&testCommerceEnabled&&(page==='order/test-checkout'?<TestCheckout/>:page.startsWith('order/')&&new URLSearchParams(window.location.search).has('session_id')?<OrderStatus cart={cart} onBack={()=>chooseView('merch',true)}/>:<StorePage page={page} onBrowse={()=>chooseView('merch',true)}/>)}
+      {page&&(page==='order/test-checkout'?<TestCheckout/>:page.startsWith('order/')&&new URLSearchParams(window.location.search).has('session_id')?<OrderStatus cart={cart} onBack={()=>chooseView('merch',true)}/>:<StorePage page={page} onBrowse={()=>chooseView('merch',true)}/>)}
       <section id="panel-garage" role="tabpanel" aria-labelledby="tab-garage" tabIndex="0" hidden={view !== 'garage' || !!page} className="view">
         <div className="garage-hero"><div><span className="eyebrow"><span className="status-dot" /> Inside the DualBore garage</span><h1>Four platforms.<br /><span>One obsession.</span></h1><p>Turbo spools. Two-stroke smoke. V-twin sound.<br />Follow the builds, the fixes, and the next lap.</p><button className="button" onClick={() => chooseView('vault', true)}><FaPlay aria-hidden="true" /> Explore the video vault</button></div><button onClick={() => openModal({type: 'video', item: films.find(film => film.id === 'c7gF1jjT9YQ')})} aria-label="Play the Yamaha RD400 hills ride" className="hero-feature"><img src="/assets/rd400.jpg" alt="Yamaha RD400 channel ride thumbnail" width="480" height="360" loading="eager" fetchPriority="high" /><span className="hero-feature-caption"><small>Featured session / Two-strokes</small><strong>Into the hills.</strong><span><FaPlay aria-hidden="true" /> Watch the RD400 ride</span></span></button></div>
         <div className="section-bar"><h2>The build roster</h2><span className="rule" /><span>04 platforms / Real channel projects</span></div>
@@ -161,7 +161,7 @@ export function App() {
       </section>
     </main>
 
-    {testCommerceEnabled ? <StoreFooter onAlert={email=>openModal({type:'alert',email})}/> : (<footer className="footer"><span className="footer-brand">DualBore Media</span><span>Built. Ridden. Repeat.</span><External href={channel.url} label="Open the DualBore Media YouTube channel"><FaYoutube aria-hidden="true" /> YouTube</External><span className="future-social">More garage handles coming soon</span><small>© {new Date().getFullYear()} DualBore Media</small></footer>)}
+    {testCommerceEnabled ? <StoreFooter onAlert={email=>openModal({type:'alert',email})}/> : (<footer className="footer"><span className="footer-brand">DualBore Media</span><span>Built. Ridden. Repeat.</span><External href={channel.url} label="Open the DualBore Media YouTube channel"><FaYoutube aria-hidden="true" /> YouTube</External><a className="text-link" href="/account">My Garage</a><span className="future-social">More garage handles coming soon</span><small>© {new Date().getFullYear()} DualBore Media</small></footer>)}
     <div className={`toast${toast ? ' visible' : ''}`} role="status" aria-live="polite" aria-atomic="true" aria-hidden={!!modal}>{toast && <><span className="status-dot" />{toast}<button aria-label="Dismiss notification" onClick={() => setToast('')}><FaXmark aria-hidden="true" /></button></>}</div>
 
     <dialog ref={dialog} aria-labelledby="modal-heading" onCancel={event => { event.preventDefault(); closeModal(); }} onClose={() => setModal(null)} onClick={event => { if (event.target === dialog.current) { const rect = dialog.current.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closeModal(); } }}>

@@ -1,6 +1,8 @@
 import {createHash,randomUUID,randomBytes,timingSafeEqual} from 'node:crypto';
 import {validateItems} from '../../src/commerce/catalog.js';
 import {deliverOrderEmails,deliverShipmentEmail} from './order-email.mjs';
+import {enqueueLifecycle} from '../operations/lifecycle.mjs';
+import {deliverLifecycleEmails} from './order-email.mjs';
 const digest=value=>createHash('sha256').update(value).digest('hex');
 export class CommerceError extends Error {constructor(code,message,status=400,details={}){super(message);Object.assign(this,{code,status,details});}}
 const bad=(code,message,status=400,details)=>{throw new CommerceError(code,message,status,details);};
@@ -9,14 +11,17 @@ const paid=o=>['paid','fulfilled','refunded'].includes(o.status);
 export const transitions={checkout_pending:['payment_pending','paid','expired','payment_failed','cancelled'],payment_pending:['paid','payment_failed'],paid:['fulfilled','refunded'],fulfilled:['refunded'],expired:[],payment_failed:[],cancelled:[],refunded:[]};
 export function transition(order,next){if(order.status===next)return false;if(!transitions[order.status]?.includes(next))bad('invalid_transition','Order transition rejected.',409);order.status=next;return true;}
 export function createCommerceService({repository,stripe,env={},now=Date.now}) {
+ const live=env.COMMERCE_ENVIRONMENT==='production';
+ const sessionPattern=live?/^cs_live_[A-Za-z0-9]{8,240}$/:/^cs_test_[A-Za-z0-9]{8,240}$/;
  const origin=env.SITE_ORIGIN||'http://127.0.0.1:4176';
- if(!/^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin))throw new Error('This commerce stage requires a loopback SITE_ORIGIN.');
- const shipping=Number(env.TEST_SHIPPING_RATE_CENTS||700);
+ if(live?(!/^https:\/\//.test(origin)||new URL(origin).origin!==origin):!/^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin))throw new Error('Configure a valid store origin.');
+ const shipping=live?Number(env.SHIPPING_RATE_CENTS||0):Number(env.TEST_SHIPPING_RATE_CENTS||700);
  if(!Number.isSafeInteger(shipping)||shipping<0||shipping>100000)throw new Error('Invalid test shipping.');
  const settle=(state,order,status)=>{for(const r of Object.values(state.reservations).filter(r=>r.orderId===order.id&&r.status==='reserved')){const v=state.variants[r.variantId];if(!v||v.reservedQuantity<r.quantity)bad('inventory_integrity','Inventory reconciliation required.',409);v.reservedQuantity-=r.quantity;r.status=status;if(status==='sold'){v.soldQuantity+=r.quantity;r.convertedAt=iso(now);}else{v.availableQuantity+=r.quantity;r.releasedAt=iso(now);}}};
  const view=o=>({orderNumber:o.orderNumber,status:o.status,items:o.items.map(({variantId,name,size,quantity,unitPriceCents,lineTotalCents})=>({variantId,name,size,quantity,unitPriceCents,lineTotalCents})),subtotalCents:o.subtotalCents,shippingCents:o.shippingCents,taxCents:o.taxCents,totalCents:o.totalCents});
  const inFlightCheckouts=new Map();
  async function checkout(input,options={}) {
+  if(live&&(env.PAYMENTS_ENABLED!=='true'||!stripe||['LIVE_CATALOG_APPROVED','SHIPPING_CONFIGURATION_APPROVED','TAX_CONFIGURATION_APPROVED','POLICIES_APPROVED'].some(k=>env[k]!=='true')))bad('payments_disabled','Orders are not open yet. Your cart is saved.',503);
   if(!input||Object.keys(input).length!==1||!Object.hasOwn(input,'items'))bad('invalid_cart','Send only variants and quantities.');
   let validated;try{validated=validateItems(input.items);}catch{bad('invalid_cart','Choose valid sizes and quantities.');}
   const signature=digest(JSON.stringify([[...validated].sort((a,b)=>a.variantId.localeCompare(b.variantId)),options.quoteToken??null]));
@@ -26,7 +31,7 @@ export function createCommerceService({repository,stripe,env={},now=Date.now}) {
   inFlightCheckouts.set(options.requestKey,{signature,promise});
   try{return await promise;}finally{if(inFlightCheckouts.get(options.requestKey)?.promise===promise)inFlightCheckouts.delete(options.requestKey);}
  }
- async function executeCheckout(input,{requestKey,quoteToken}={}) {
+ async function executeCheckout(input,{requestKey,quoteToken,customer}={}) {
   if(!input||Object.keys(input).length!==1||!Object.hasOwn(input,'items'))bad('invalid_cart','Send only variants and quantities.');
   let items;try{items=validateItems(input.items);}catch{bad('invalid_cart','Choose valid sizes and quantities.');}
   if(!/^[a-f0-9-]{36}$/i.test(requestKey||''))bad('invalid_key','A checkout request key is required.');
@@ -37,11 +42,12 @@ export function createCommerceService({repository,stripe,env={},now=Date.now}) {
   let work=await repository.transaction(state=>{
    const existing=Object.values(state.orders).find(o=>o.requestKey===requestKey);
    if(existing){if(existing.cartHash!==cartHash)bad('request_conflict','This request belongs to a different cart.',409);if(existing.sessionUrl)return {order:existing,reused:true};if(existing.status!=='checkout_pending')bad('checkout_failed','Start a new checkout request.',409);if(existing.checkoutLeaseToken&&Date.parse(existing.checkoutLeaseUntil)>now())bad('checkout_in_progress','Checkout is already starting. Retry this request shortly.',409);existing.checkoutLeaseToken=attemptToken;existing.checkoutLeaseUntil=leaseUntil;return{order:existing,recovery:true};}
-   const lines=items.map(i=>{const v=state.variants[i.variantId];if(!v?.active)bad('inactive_variant','A selected design is no longer available.',409);if(v.availableQuantity<i.quantity)bad('insufficient_stock','A selected size has insufficient stock. Update your cart.',409);if(!v.stripePriceId)bad('catalog_not_synced','Stripe test catalog is not configured.',503);return {...i,sku:v.sku,name:v.name,size:v.size,unitPriceCents:v.priceCents,lineTotalCents:v.priceCents*i.quantity,stripePriceId:v.stripePriceId};});
+   const lines=items.map(i=>{const v=state.variants[i.variantId];if(!v?.active)bad('inactive_variant','A selected design is no longer available.',409);if(v.availableQuantity<i.quantity)bad('insufficient_stock','A selected size has insufficient stock. Update your cart.',409);const priceId=live?v.liveStripePriceId:v.stripePriceId,amount=live?v.productionPriceCents:v.priceCents;if(!priceId||!Number.isSafeInteger(amount)||amount<1)bad('catalog_not_synced','The approved catalog is not configured.',503);return {...i,sku:v.sku,name:v.name,size:v.size,unitPriceCents:amount,lineTotalCents:amount*i.quantity,stripePriceId:priceId};});
    const hash=digest(JSON.stringify(lines));
-   if(lines.some(l=>l.unitPriceCents!==3000)&&quoteToken!==hash)bad('cart_changed','A price changed. Review the updated prices.',409,{quoteToken:hash,lines});
-   const id=randomUUID();const order={id,isTest:true,testProvider:env.COMMERCE_MOCK==='true'?'mock':'stripe',orderNumber:'DBM-'+randomBytes(6).toString('hex').toUpperCase(),requestKey,cartHash,accessTokenHash:digest(accessToken),status:'checkout_pending',currency:'usd',subtotalCents:lines.reduce((s,l)=>s+l.lineTotalCents,0),shippingCents:shipping,taxCents:null,totalCents:null,items:lines,createdAt:iso(now),expiresAt:new Date(now()+35*60*1000).toISOString(),sessionId:null,customerEmail:null,fulfillmentStatus:'unfulfilled',refundStatus:'none',refundedCents:0,stripeRefundIds:[]};
+   if((live||lines.some(l=>l.unitPriceCents!==3000))&&quoteToken!==hash)bad('cart_changed','Review the current prices before checkout.',409,{quoteToken:hash,lines:lines.map(({stripePriceId,...line})=>line)});
+   const id=randomUUID();const order={id,isTest:!live,testProvider:env.COMMERCE_MOCK==='true'?'mock':'stripe',orderNumber:'DBM-'+randomBytes(6).toString('hex').toUpperCase(),requestKey,cartHash,accessTokenHash:digest(accessToken),status:'checkout_pending',currency:'usd',subtotalCents:lines.reduce((s,l)=>s+l.lineTotalCents,0),shippingCents:shipping,taxCents:null,totalCents:null,items:lines,createdAt:iso(now),expiresAt:new Date(now()+35*60*1000).toISOString(),sessionId:null,customerEmail:null,fulfillmentStatus:'received',refundStatus:'none',refundedCents:0,stripeRefundIds:[]};
    state.orders[id]=order;
+   if(customer?.userId&&customer.email){order.verifiedCustomerCandidate={userId:customer.userId,email:customer.email};}
    order.checkoutLeaseToken=attemptToken;order.checkoutLeaseUntil=leaseUntil;
    for(const line of lines){const v=state.variants[line.variantId];v.availableQuantity-=line.quantity;v.reservedQuantity+=line.quantity;const rid=randomUUID();state.reservations[rid]={id:rid,orderId:id,sessionId:null,variantId:line.variantId,quantity:line.quantity,status:'reserved',expiresAt:order.expiresAt,createdAt:order.createdAt};}
    return{order};
@@ -49,13 +55,16 @@ export function createCommerceService({repository,stripe,env={},now=Date.now}) {
   const order=work.order;
   if(work.reused)return {url:order.sessionUrl,sessionId:order.sessionId,orderAccessToken:accessToken};
   // Stripe idempotency is scoped to one immutable pending order. Concurrent retries reuse the same session.
-  const params={mode:'payment',line_items:order.items.map(l=>({price:l.stripePriceId,quantity:l.quantity})),shipping_address_collection:{allowed_countries:['US']},shipping_options:[{shipping_rate_data:{type:'fixed_amount',fixed_amount:{amount:order.shippingCents,currency:'usd'},display_name:'USA flat shipping (TEST)',tax_behavior:'exclusive'}}],automatic_tax:{enabled:env.STRIPE_AUTOMATIC_TAX==='true'},expires_at:Math.floor(new Date(order.expiresAt).getTime()/1000),success_url:origin+'/order/success?session_id={CHECKOUT_SESSION_ID}',cancel_url:origin+'/order/cancel?session_id={CHECKOUT_SESSION_ID}',metadata:{order_id:order.id,source:'dualbore-media-site'},integration_identifier:'dbm-checkout-'+order.id.replace(/[^a-z]/g,'').padEnd(8,'a').slice(0,8)};
+  let params={mode:'payment',customer_creation:'always',line_items:order.items.map(l=>({price:l.stripePriceId,quantity:l.quantity})),shipping_address_collection:{allowed_countries:['US']},shipping_options:[{shipping_rate_data:{type:'fixed_amount',fixed_amount:{amount:order.shippingCents,currency:'usd'},display_name:live?'USA flat shipping':'USA flat shipping (TEST)',tax_behavior:'exclusive'}}],automatic_tax:{enabled:env.STRIPE_AUTOMATIC_TAX==='true'},expires_at:Math.floor(new Date(order.expiresAt).getTime()/1000),success_url:origin+'/order/success?session_id={CHECKOUT_SESSION_ID}',cancel_url:origin+'/order/cancel?session_id={CHECKOUT_SESSION_ID}',metadata:{order_id:order.id,source:'dualbore-media-site'},integration_identifier:'dbm-checkout-'+order.id.replace(/[^a-z]/g,'').padEnd(8,'a').slice(0,8)};
   let session;
+  if(order.verifiedCustomerCandidate)params.customer_email=order.verifiedCustomerCandidate.email;
+   params=await repository.transaction(s=>{const o=s.orders[order.id];o.checkoutParams??=params;return o.checkoutParams;});
+
   try {
    if(params.automatic_tax.enabled){const registrations=await stripe.tax.registrations.list({status:'active',limit:1});if(!registrations.data.length)bad('tax_not_configured','Configure active sandbox tax registration first.',503);}
-   for(const l of order.items){const price=await stripe.prices.retrieve(l.stripePriceId);if(price.livemode||!price.active||price.currency!=='usd'||price.unit_amount!==l.unitPriceCents)bad('stripe_price_mismatch','Stripe test price differs from the trusted catalog.',409);}
+   for(const l of order.items){const price=await stripe.prices.retrieve(l.stripePriceId);if(price.livemode!==live||!price.active||price.currency!=='usd'||price.unit_amount!==l.unitPriceCents)bad('stripe_price_mismatch','The payment price differs from the trusted catalog.',409);}
    session=await stripe.checkout.sessions.create(params,{idempotencyKey:'dbm-checkout-'+order.id});
-   if(session.livemode||!/^cs_test_[A-Za-z0-9]+$/.test(session.id)||new URL(session.url).origin!=='https://checkout.stripe.com')throw new Error('Invalid sandbox session.');
+   if(session.livemode!==live||!sessionPattern.test(session.id)||new URL(session.url).origin!=='https://checkout.stripe.com')throw new Error('Invalid payment session.');
   }catch(error){
    // Ambiguous transport failures may have created a Stripe session: retain reservation for idempotent recovery.
    const definitive=error instanceof CommerceError||['StripeInvalidRequestError','StripeAuthenticationError','StripePermissionError'].includes(error.type);
@@ -67,11 +76,21 @@ export function createCommerceService({repository,stripe,env={},now=Date.now}) {
   return{url:session.url,sessionId:session.id,orderAccessToken:accessToken};
  }
  async function webhook(event){
-  if(!event||event.livemode!==false||!/^evt_[A-Za-z0-9_]+$/.test(event.id||'')||typeof event.type!=='string')bad('invalid_event','Invalid sandbox event.');
+  if(!event||event.livemode!==live||!/^evt_[A-Za-z0-9_]+$/.test(event.id||'')||typeof event.type!=='string')bad('invalid_event','Invalid payment event.');
+  if(['refund.created','refund.updated','refund.failed'].includes(event.type)){
+   const object=event.data?.object;if(!object||object.currency!=='usd'||!/^re_[A-Za-z0-9]+$/.test(object.id||''))bad('invalid_event','Invalid refund event.');
+   if(object.status!=='succeeded'){if(['failed','canceled'].includes(object.status))await repository.transaction(s=>{for(const r of Object.values(s.refundRequests))if(r.refundId===object.id||r.id===object.metadata?.dbm_request_id){if(r.status!=='succeeded'){r.status='failed';r.refundId=object.id;}}});return {ignored:true};}
+   const order=await repository.transaction(s=>Object.values(s.orders).find(o=>o.paymentIntentId===object.payment_intent));
+   if(!order)bad('unknown_order','Refund needs reconciliation.',409);
+   await recordVerifiedRefund(order.id,{refundId:object.id,amountCents:object.amount});
+   await repository.transaction(s=>{for(const r of Object.values(s.refundRequests))if(r.orderId===order.id&&r.amountCents===object.amount&&(r.refundId===object.id||r.id===object.metadata?.dbm_request_id)){r.status='succeeded';r.refundId=object.id;}});
+   await repository.transaction(s=>{s.events[event.id]={id:event.id,type:event.type,orderId:order.id,status:'processed',createdAt:iso(now),processedAt:iso(now)};});
+   await deliverLifecycleEmails({repository,orderId:order.id,env});return {received:true};
+  }
   const types=['checkout.session.completed','checkout.session.expired','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed'];
   if(!types.includes(event.type))return{ignored:true};
   const session=event.data?.object;
-  if(!session||session.livemode!==false||!/^cs_test_[A-Za-z0-9]+$/.test(session.id||''))bad('invalid_event','Invalid sandbox session event.');
+  if(!session||session.livemode!==live||!sessionPattern.test(session.id||''))bad('invalid_event','Invalid payment session event.');
   const orderId=await repository.transaction(s=>{
    if(s.events[event.id]?.status==='processed')return s.events[event.id].orderId;
    const o=s.orders[session.metadata?.order_id];if(!o)bad('unknown_order','Order link is not ready. Retry webhook.',409);
@@ -84,7 +103,9 @@ export function createCommerceService({repository,stripe,env={},now=Date.now}) {
       if(![subtotal,shippingAmount,tax,total].every(Number.isSafeInteger)||subtotal!==o.subtotalCents||shippingAmount!==o.shippingCents||tax<0||total!==subtotal+shippingAmount+tax||session.currency!=='usd')bad('amount_mismatch','Payment totals require reconciliation.',409);
       const address=session.collected_information?.shipping_details||session.shipping_details;
       if(address?.address?.country!=='US'||!session.customer_details?.email)bad('shipping_missing','USA shipping details are required.',409);
-      transition(o,'paid');settle(s,o,'sold');Object.assign(o,{paidAt:iso(now),customerEmail:session.customer_details.email,shippingName:address.name,shippingAddress:address.address,paymentIntentId:typeof session.payment_intent==='string'?session.payment_intent:session.payment_intent?.id,taxCents:tax,totalCents:total});
+      transition(o,'paid');settle(s,o,'sold');Object.assign(o,{paidAt:iso(now),customerEmail:session.customer_details.email,shippingName:address.name,shippingAddress:address.address,stripeCustomerId:typeof session.customer==='string'?session.customer:session.customer?.id,paymentIntentId:typeof session.payment_intent==='string'?session.payment_intent:session.payment_intent?.id,taxCents:tax,totalCents:total});
+      const aid=randomUUID();s.audit[aid]={id:aid,actor:'stripe',action:'payment',target:o.orderNumber,createdAt:iso(now),metadata:{previous:'pending',next:'paid',source:'verified-webhook'}};
+      if(o.verifiedCustomerCandidate?.email.toLowerCase()===o.customerEmail.toLowerCase())o.customerUserId=o.verifiedCustomerCandidate.userId;
      }
     }else if(o.status==='checkout_pending')transition(o,'payment_pending');
    }else if(!paid(o)){
@@ -97,13 +118,13 @@ export function createCommerceService({repository,stripe,env={},now=Date.now}) {
   return{received:true};
  }
  async function status(sessionId,token){
-  if(!/^cs_test_[A-Za-z0-9]{8,220}$/.test(sessionId||'')||!/^([a-f0-9]{64})$/.test(token||''))bad('not_found','Order not found.',404);
+  if(!sessionPattern.test(sessionId||'')||!/^([a-f0-9]{64})$/.test(token||''))bad('not_found','Order not found.',404);
   return repository.transaction(s=>{const o=Object.values(s.orders).find(x=>x.sessionId===sessionId);if(!o||!timingSafeEqual(Buffer.from(o.accessTokenHash,'hex'),Buffer.from(digest(token),'hex')))bad('not_found','Order not found.',404);const email=Object.values(s.emails).find(e=>e.orderId===o.id&&e.emailType==='customer-confirmation');return{...view(o),emailStatus:email?.status||'not_sent'};});
  }
  async function fulfill(orderId,{carrier,trackingNumber,trackingUrl}){let url;try{url=new URL(trackingUrl);if(url.protocol!=='https:')throw 0;}catch{bad('invalid_tracking','Use an HTTPS tracking URL.');}await repository.transaction(s=>{const o=s.orders[orderId];if(!o)bad('not_found','Order not found.',404);transition(o,'fulfilled');Object.assign(o,{carrier:String(carrier).slice(0,80),trackingNumber:String(trackingNumber).slice(0,120),trackingUrl:url.href,shippedAt:iso(now),fulfilledAt:iso(now),fulfillmentStatus:'fulfilled'});});return deliverShipmentEmail({repository,orderId,env,now:()=>new Date(now())});}
  async function recordVerifiedRefund(orderId,{refundId,amountCents}){
   if(!/^re_[A-Za-z0-9]+$/.test(refundId||'')||!Number.isSafeInteger(amountCents)||amountCents<1)bad('invalid_refund','Invalid verified refund.');
-  return repository.transaction(s=>{const o=s.orders[orderId];if(!o||!paid(o))bad('invalid_refund','A paid order is required.',409);o.stripeRefundIds??=[];if(o.stripeRefundIds.includes(refundId))return false;const amount=(o.refundedCents||0)+amountCents;if(amount>o.totalCents)bad('invalid_refund','Refund exceeds order total.',409);o.stripeRefundIds.push(refundId);o.refundedCents=amount;o.refundStatus=amount===o.totalCents?'full':'partial';if(o.refundStatus==='full')transition(o,'refunded');return true;});
+  return repository.transaction(s=>{const o=s.orders[orderId];if(!o||!paid(o))bad('invalid_refund','A paid order is required.',409);o.stripeRefundIds??=[];if(o.stripeRefundIds.includes(refundId))return false;const amount=(o.refundedCents||0)+amountCents;if(amount>o.totalCents)bad('invalid_refund','Refund exceeds order total.',409);o.stripeRefundIds.push(refundId);o.refundedCents=amount;o.refundStatus=amount===o.totalCents?'full':'partial';if(o.refundStatus==='full')transition(o,'refunded');const aid=randomUUID();s.audit[aid]={id:aid,actor:'stripe',action:'refund-confirmed',target:o.orderNumber,createdAt:iso(now),metadata:{refundId,amountCents}};enqueueLifecycle(s,o,'refund',{eventKey:refundId,now:iso(now)});return true;});
  }
  return{checkout,webhook,status,fulfill,recordVerifiedRefund};
 }

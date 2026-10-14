@@ -1,5 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { emptyState } from './memory-repository.mjs';
 export { emptyState, initialEmptyState } from './memory-repository.mjs';
 
@@ -49,6 +50,16 @@ export async function runMigrations(pool, directory = migrationDirectory) {
 }
 
 const schemas = {
+  supportTickets: ['support_tickets', 'id', {id:'id'}],
+  marketingContacts: ['marketing_contacts', 'id', {id:'id'}],
+  marketingEvents: ['marketing_events', 'id', {id:'id'}],
+  profiles: ['customer_profiles', 'id', {id:'id'}],
+  shipments: ['shipments', 'id', {id:'id',order_id:'orderId'}],
+  shipmentItems: ['shipment_items', 'id', {id:'id',shipment_id:'shipmentId',variant_id:'variantId',quantity:'quantity'}],
+  trackingEvents: ['tracking_events', 'id', {id:'id',shipment_id:'shipmentId'}],
+  audit: ['audit_events', 'id', {id:'id',actor:'actor',action:'action',target:'target',created_at:'createdAt'}],
+  refundRequests: ['refund_requests', 'id', {id:'id',order_id:'orderId'}],
+  limits: ['request_limits', 'id', {id:'id'}],
   variants: ['product_variants', 'id', {
     id: 'id', product_id: 'productId', sku: 'sku', product_name: 'name', size: 'size', active: 'active', price_cents: 'priceCents', stripe_price_id: 'stripePriceId', available_quantity: 'availableQuantity', reserved_quantity: 'reservedQuantity', sold_quantity: 'soldQuantity',
   }],
@@ -81,12 +92,24 @@ async function upsert(client, table, primaryKey, fields, object) {
     const value = object[property] ?? null;
     return column === 'shipping_address_json' && value !== null ? JSON.stringify(value) : value;
   }), JSON.stringify(object)];
+  if(table === 'audit_events') {
+    const previous = (await client.query('SELECT data FROM audit_events WHERE id = $1', [object.id])).rows[0];
+    if(previous) {
+      const data = typeof previous.data === 'string' ? JSON.parse(previous.data) : previous.data;
+      if(!isDeepStrictEqual(data, object)) throw new Error('Audit history is immutable.');
+      return;
+    }
+  }
   // Identifiers come only from the static descriptors above; ALL values are bound.
   await client.query(`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map((_, i) => `$${i + 1}`).join(', ')}) ON CONFLICT (${primaryKey}) DO UPDATE SET ${columns.filter(column => column !== primaryKey).map(column => `${column} = EXCLUDED.${column}`).join(', ')}${table === 'product_variants' ? ', updated_at = now()' : ''}`, values);
 }
 
 async function persist(client, state) {
-  for (const [key, [table, primaryKey, fields]] of Object.entries(schemas)) {
+  const sequence=['variants','orders','events','reservations','emails','profiles','shipments','shipmentItems','trackingEvents','audit','refundRequests','limits','supportTickets','marketingContacts','marketingEvents'];
+  const auditIds=(await client.query('SELECT id FROM audit_events')).rows.map(row=>row.id);
+  if(auditIds.some(id=>!state.audit[id])) throw new Error('Audit history is immutable.');
+  for (const key of sequence) {
+    const [table, primaryKey, fields] = schemas[key];
     for (const [id, value] of Object.entries(state[key])) {
       if (value.id !== id) throw new Error('Commerce state map key must match record ID.');
       await upsert(client, table, primaryKey, fields, value);
@@ -100,7 +123,7 @@ async function persist(client, state) {
       await client.query('INSERT INTO order_items (id, order_id, position, variant_id, sku_snapshot, product_name_snapshot, size_snapshot, quantity, unit_price_cents, line_total_cents, data) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)', [`${order.id}:${position}`, order.id, position, item.variantId, item.sku, item.name, item.size, item.quantity, item.unitPriceCents, item.lineTotalCents, JSON.stringify(item)]);
     }
   }
-  for (const key of ['emails', 'reservations', 'events', 'orders', 'variants']) {
+  for (const key of ['marketingEvents','marketingContacts','supportTickets','limits', 'refundRequests', 'trackingEvents', 'shipmentItems', 'shipments', 'profiles', 'emails', 'reservations', 'events', 'orders', 'variants']) {
     const [table, primaryKey] = schemas[key];
     await client.query(`DELETE FROM ${table} WHERE NOT (${primaryKey} = ANY($1::text[]))`, [Object.keys(state[key])]);
   }

@@ -36,7 +36,7 @@ test('Postgres migrations, normalized persistence, reload, uniqueness and rollba
   const pool = { connect: async () => client };
   try {
     await runMigrations(pool); await runMigrations(pool);
-    assert.equal((await database.query('SELECT count(*)::int AS n FROM commerce_migrations')).rows[0].n, 1);
+    assert.equal((await database.query('SELECT count(*)::int AS n FROM commerce_migrations')).rows[0].n, 3);
     const repository = createPostgresRepository(pool);
     await repository.transaction(state => {
       state.variants[variant.id] = structuredClone(variant);

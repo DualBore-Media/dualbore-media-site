@@ -2,7 +2,7 @@ import {readFile} from 'node:fs/promises';
 import {resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-export const requiredDeclarations=['STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET','DATABASE_URL','RESEND_API_KEY','RESEND_FROM'];
+export const requiredDeclarations=['STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET','DATABASE_URL','RESEND_API_KEY','RESEND_FROM','RESEND_REPLY_TO','CLERK_SECRET_KEY','CLERK_PUBLISHABLE_KEY','PAYMENTS_ENABLED','TRANSACTIONAL_EMAILS_ENABLED'];
 export function checkLaunch({policyText='',catalogText='',declarations='',env={}}={}) {
   const blockers=[];
   if(!policyText.trim() || /\[[^\]]*REQUIRED\]|TODO|placeholder|draft for review|not an approved|still need confirmation|review required|policy pending|owner decisions still required/i.test(policyText)) blockers.push('Customer policies contain draft or placeholder wording.');
@@ -20,6 +20,14 @@ export function checkLaunch({policyText='',catalogText='',declarations='',env={}
   if(env.LIVE_CATALOG_APPROVED!=='true') blockers.push('Live prices, inventory and Stripe catalog require approval.');
   if(env.TAX_CONFIGURATION_APPROVED!=='true') blockers.push('Tax configuration requires owner/professional review.');
   if(env.RESEND_DOMAIN_VERIFIED!=='true') blockers.push('Transactional sender domain is not confirmed as verified.');
+  if(!env.RESEND_FROM||/resend\.dev|example\./i.test(env.RESEND_FROM))blockers.push('Production email domain required.');
+  if(!env.RESEND_REPLY_TO||/example\./i.test(env.RESEND_REPLY_TO))blockers.push('A confirmed monitored reply-to address is required.');
+  if(!env.CLERK_SECRET_KEY?.startsWith('sk_live_')||!env.CLERK_PUBLISHABLE_KEY?.startsWith('pk_live_'))blockers.push('Production Clerk instance keys are missing or not live.');
+  if(!env.CLERK_FRONTEND_ORIGIN||!/^https:\/\//.test(env.CLERK_FRONTEND_ORIGIN))blockers.push('Exact production Clerk frontend origin/CSP configuration is missing.');
+  if(env.COMMERCE_ENVIRONMENT!=='production')blockers.push('Production environment is not selected.');
+  for(const [key,message]of Object.entries({SECURITY_REVIEW_PASSED:'Critical/high security findings require resolution.',REQUIRED_TESTS_PASSED:'Required release-candidate tests need fresh passing evidence.',MIGRATIONS_VERIFIED:'Production migrations require verification.',MARKETING_SUPPRESSION_VERIFIED:'Durable production marketing suppression requires verification.',FRONTEND_PRODUCTION_QA_VERIFIED:'The configured production-shaped frontend requires rendered verification.',AUTH_PRODUCTION_VERIFIED:'Managed production sign-in, verification, recovery and sessions require real validation.',ADMIN_MFA_VERIFIED:'Administrator MFA and role authorization require real validation.',PRODUCTION_DATABASE_VERIFIED:'A separate production database and applied migrations require verification.',DATABASE_BACKUP_RESTORE_VERIFIED:'Production backup and restore rehearsal is required.',STRIPE_WEBHOOK_VERIFIED:'Post-deployment live Stripe webhook signature and event delivery require verification.',RESEND_DELIVERY_VERIFIED:'Production sender delivery and lifecycle retry require verification.',PROCESSING_TIME_APPROVED:'Final processing time is missing.',RETURN_WINDOW_APPROVED:'Final return window is missing.',RETENTION_POLICY_APPROVED:'Data retention and account deletion policy require approval.',SUPPORT_WORKFLOW_APPROVED:'Support inbox and response workflow require confirmation.',LIVE_INVENTORY_APPROVED:'Real production inventory must be counted and approved.'}))if(env[key]!=='true')blockers.push(message);
+  if(env.PAYMENTS_ENABLED!=='true')blockers.push('Payments remain intentionally disabled pending explicit launch approval.');
+  if(env.TRANSACTIONAL_EMAILS_ENABLED!=='true')blockers.push('Production transactional email remains intentionally disabled.');
   return {ready:blockers.length===0,blockers};
 }
 

@@ -6,6 +6,15 @@ function localCommerce(mode) {
   return { name:'local-commerce-quote', configureServer(server) {
     if (mode !== 'commerce') return;
     const env={...loadEnv(mode,process.cwd(),''),...process.env};
+    server.middlewares.use('/api/operations',async(req,res)=>{
+      try{
+        const host=req.headers.host;if(!/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host||'')){res.writeHead(403);res.end();return;}
+        let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>16384){res.writeHead(413);res.end();return;}chunks.push(chunk);}
+        const request=new Request(`http://${host}${req.originalUrl}`,{method:req.method,headers:req.headers,...(['GET','HEAD'].includes(req.method)?{}:{body:Buffer.concat(chunks)})});
+        const {operationsHttp}=await import('./netlify/operations/http.mjs');const response=await operationsHttp(request,{env,clientIp:req.socket.remoteAddress||'local'});
+        res.writeHead(response.status,Object.fromEntries(response.headers));res.end(await response.text());
+      }catch{res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'The garage is temporarily unavailable.'}));}
+    });
     server.middlewares.use('/api/commerce',async(req,res)=>{
       try{
         const host=req.headers.host;
@@ -46,7 +55,7 @@ export default defineConfig(({mode}) => ({
     include: ["react", "react-dom/client"],
   },
   server: {
-    host: "0.0.0.0",
+    host: "127.0.0.1",
     allowedHosts: ["terminal.local"],
     warmup: {
       clientFiles: ["./src/main.jsx"],

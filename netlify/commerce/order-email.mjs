@@ -20,7 +20,7 @@ export function renderOrderEmail(order) {
   const shipping = order.shippingAddress ?? {};
   const destination = [order.shippingName,shipping.line1,shipping.line2,[shipping.city,shipping.state,shipping.postal_code ?? shipping.postalCode].filter(Boolean).join(' '),shipping.country].filter(Boolean).map(clean);
   const text = [notice, `DualBore Media | Order ${number}`, 'Payment confirmed. Thank you for your order.', ...lines, ...totals, 'Ship to:', ...destination, 'This confirms payment, not shipment.'].join('\n');
-  return {subject:`${test?'[TEST] ':''}DualBore Media order ${number} confirmed`,text,html:`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Order confirmation</title></head><body style="font-family:Arial,sans-serif;font-size:16px;line-height:1.6;color:#17191d;background:#ffffff"><main style="max-width:600px;margin:auto;padding:24px"><h1>Order ${escape(number)} confirmed</h1>${notice?`<p><strong>${escape(notice)}</strong></p>`:''}<p>Payment confirmed. Thank you for your order.</p><ul>${lines.map(line=>`<li>${escape(line)}</li>`).join('')}</ul>${totals.map(line=>`<p>${escape(line)}</p>`).join('')}<h2>Ship to</h2><p>${destination.map(escape).join('<br>')}</p><p>This confirms payment, not shipment.</p></main></body></html>`};
+  return {subject:`${test?'[TEST] ':''}DualBore Media order ${number} confirmed`,text,html:`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Order confirmation</title></head><body style="font-family:Arial,sans-serif;font-size:16px;line-height:1.6;color:#f5f7fb;background:#0b0d10"><main style="max-width:600px;margin:auto;padding:28px;background:#13161c;border-top:4px solid #ff2a3b"><p style="color:#00f0ff;font-weight:bold;letter-spacing:3px">DUALBORE / MEDIA</p><h1>Order ${escape(number)} confirmed</h1>${notice?`<p><strong>${escape(notice)}</strong></p>`:''}<p>Payment confirmed. Thank you for your order.</p><ul>${lines.map(line=>`<li>${escape(line)}</li>`).join('')}</ul>${totals.map(line=>`<p>${escape(line)}</p>`).join('')}<h2>Ship to</h2><p>${destination.map(escape).join('<br>')}</p><p>This confirms payment, not shipment.</p></main></body></html>`};
 }
 
 export function renderShipmentEmail(order) {
@@ -31,16 +31,17 @@ export function renderShipmentEmail(order) {
   const number=clean(order.orderNumber||order.id);
   const items=(order.items||[]).map(item=>`${clean(item.name)} | Size ${clean(item.size)} | Qty ${item.quantity}`);
   const text=[notice,`DualBore Media | Shipment for ${number}`,'Your package has been marked as shipped.',...items,`Carrier: ${clean(order.carrier)}`,`Tracking number: ${clean(order.trackingNumber)}`,`Track your package: ${tracking.href}`,'Carrier tracking provides the latest delivery status.'].join('\n');
-  return {subject:`${test?'[TEST] ':''}Your DualBore Media order ${number} has shipped`,text,html:`<!doctype html><html lang="en"><body style="font-family:Arial,sans-serif;line-height:1.6"><main><h1>Order ${escape(number)} has shipped</h1>${notice?`<p><strong>${escape(notice)}</strong></p>`:''}<p>Your package has been marked as shipped.</p><ul>${items.map(item=>`<li>${escape(item)}</li>`).join('')}</ul><p>Carrier: ${escape(clean(order.carrier))}<br>Tracking number: ${escape(clean(order.trackingNumber))}</p><p><a href="${escape(tracking.href)}">Track your package</a></p><p>Carrier tracking provides the latest delivery status.</p></main></body></html>`};
+  return {subject:`${test?'[TEST] ':''}Your DualBore Media order ${number} has shipped`,text,html:`<!doctype html><html lang="en"><body style="font-family:Arial,sans-serif;line-height:1.6;color:#f5f7fb;background:#0b0d10"><main style="max-width:600px;margin:auto;padding:28px;background:#13161c;border-top:4px solid #ff2a3b"><p style="color:#00f0ff;font-weight:bold;letter-spacing:3px">DUALBORE / MEDIA</p><h1>Order ${escape(number)} has shipped</h1>${notice?`<p><strong>${escape(notice)}</strong></p>`:''}<p>Your package has been marked as shipped.</p><ul>${items.map(item=>`<li>${escape(item)}</li>`).join('')}</ul><p>Carrier: ${escape(clean(order.carrier))}<br>Tracking number: ${escape(clean(order.trackingNumber))}</p><p><a href="${escape(tracking.href)}">Track your package</a></p><p>Carrier tracking provides the latest delivery status.</p></main></body></html>`};
 }
 
-async function sendType({repository,orderId,type,env,fetchImpl,now}) {
+async function sendType({repository,orderId,type,eventId,env,fetchImpl,now}) {
+  if(env.COMMERCE_ENVIRONMENT==='production' && env.TRANSACTIONAL_EMAILS_ENABLED!=='true')return {type,status:'disabled'};
   const timestamp = now().getTime();
-  const id = `${orderId}:${type}`;
+  const id = eventId || `${orderId}:${type}`;
   const token = randomUUID();
   const claim = await repository.transaction(async state => {
     const order = state.orders[orderId];
-    if (!order || !['paid','fulfilled'].includes(order.status)) return {status:'not-paid'};
+    if (!order || !['paid','fulfilled',...(type.startsWith('lifecycle-')?['refunded']:[])].includes(order.status)) return {status:'not-paid'};
     if(type==='customer-shipment'&&order.status!=='fulfilled')return {status:'not-shipped'};
     if (order.testProvider==='mock') return {status:'mock-suppressed'};
     const previous = state.emails[id];
@@ -55,7 +56,7 @@ async function sendType({repository,orderId,type,env,fetchImpl,now}) {
     const recipient = type !== 'merchant-notification' ? order.customerEmail : env.RESEND_NOTIFY_TO;
     if (!recipient && type === 'merchant-notification') return {status:'not-configured'};
     if (!address(recipient)) return {status:'recipient-invalid'};
-    const template = type==='customer-shipment'?renderShipmentEmail(order):renderOrderEmail(order);
+    const template = previous?.template || (type==='customer-shipment'?renderShipmentEmail(order):renderOrderEmail(order));
     const payload = previous?.payload ?? {from:env.RESEND_FROM,to:[recipient],...template,...(env.RESEND_REPLY_TO?{reply_to:env.RESEND_REPLY_TO}:{}),...(type==='merchant-notification'?{subject:`${sandboxOrder(order)?'[TEST] ':''}Paid order ${clean(order.orderNumber || order.id)} | DualBore Media`}:{})};
     const row = {...previous,id,orderId,emailType:type,provider:'resend',providerMessageId:previous?.providerMessageId ?? null,status:'sending',attemptCount:(previous?.attemptCount ?? 0)+1,lastError:null,createdAt:previous?.createdAt ?? new Date(timestamp).toISOString(),sentAt:null,firstAttemptAt:previous?.firstAttemptAt ?? new Date(timestamp).toISOString(),leaseToken:token,leaseExpiresAt:new Date(timestamp+leaseMs).toISOString(),retryAfter:null,uncertain:Boolean(previous?.uncertain || previous?.status==='sending'),payload};
     state.emails[id]=row;
@@ -81,6 +82,19 @@ async function sendType({repository,orderId,type,env,fetchImpl,now}) {
     Object.assign(row,{status:status==='sent'?'sent':retryable?'queued':'failed',lastError,providerMessageId,uncertain:row.uncertain || uncertain,leaseToken:null,leaseExpiresAt:null,sentAt:status==='sent'?now().toISOString():null,retryAfter:status!=='sent'?new Date(timestamp+Math.min(60_000*2**Math.min(claim.attemptCount-1,6),3_600_000)).toISOString():null});
   });
   return {type,status:status==='sent'?'sent':retryable?'retry-queued':'failed'};
+}
+
+export async function deliverLifecycleEmails({repository,orderId,env={},fetchImpl=fetch,now=()=>new Date()}) {
+  try {
+    const events=await repository.transaction(s=>Object.values(s.emails).filter(e=>e.orderId===orderId&&e.emailType.startsWith('lifecycle-')));
+    const results=[];for(const e of events)results.push(await sendType({repository,orderId,type:e.emailType,eventId:e.id,env,fetchImpl,now}));
+    return results;
+  }catch{return [{status:'storage-or-order-unavailable'}];}
+}
+export async function retryRecordedEmail({repository,eventId,env={},fetchImpl=fetch,now=()=>new Date()}) {
+  const event=await repository.transaction(s=>s.emails[eventId]);
+  if(!event)return {status:'not-found'};
+  return sendType({repository,orderId:event.orderId,type:event.emailType,eventId,env,fetchImpl,now});
 }
 
 // Call only from a verified webhook/recovery worker, never a public email endpoint.

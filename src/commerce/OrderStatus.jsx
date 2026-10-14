@@ -2,7 +2,8 @@ import {useEffect,useRef,useState} from 'react';
 import {money,variantById,validateItems} from './catalog.js';
 import {validSessionId,removePurchased,cartSignature} from './checkout-client.js';
 
-export function OrderStatus({cart,onBack}){
+export function OrderStatus({cart,onBack,mode="test"}){
+  const test=mode!=="production";
   const sessionId=new URLSearchParams(window.location.search).get('session_id');
   const cancellationReturn=window.location.pathname.endsWith('/cancel');
   const [verificationRun,setVerificationRun]=useState(0);
@@ -12,7 +13,7 @@ export function OrderStatus({cart,onBack}){
   useEffect(()=>{
     const active=new AbortController();let timer;let attempts=0;setChecking(true);setError('');
     const stop=message=>{setError(message);setChecking(false);};
-    if(!validSessionId(sessionId)){stop('No valid test session was provided. Your cart is unchanged.');return()=>active.abort();}
+    if(!validSessionId(sessionId,mode)){stop('No valid checkout session was provided. Your cart is unchanged.');return()=>active.abort();}
     let token;
     try{token=sessionStorage.getItem(`dbm-order-access:${sessionId}`);}catch{}
     if(!token){stop('This browser does not have access to verify this order. Your cart is unchanged.');return()=>active.abort();}
@@ -23,7 +24,7 @@ export function OrderStatus({cart,onBack}){
         const payload=await response.json();if(!response.ok)throw new Error(payload.error||'Order verification is unavailable.');
         if(active.signal.aborted)return;
         setMock(payload.mock===true);
-        if(!['pending','paid','fulfilled','cancelled','failed','expired'].includes(payload.status))throw new Error('The order status could not be verified.');
+        if(!['pending','paid','fulfilled','cancelled','failed','expired','refunded'].includes(payload.status))throw new Error('The order status could not be verified.');
         if(['paid','fulfilled'].includes(payload.status)){
           const items=validateItems(payload.items?.map(({variantId,quantity})=>({variantId,quantity})));
           if(typeof payload.orderNumber!=='string'||!['subtotalCents','shippingCents','taxCents','totalCents'].every(key=>Number.isSafeInteger(payload[key])&&payload[key]>=0)||payload.totalCents!==payload.subtotalCents+payload.shippingCents+payload.taxCents)throw new Error('Order totals could not be verified.');
@@ -35,7 +36,7 @@ export function OrderStatus({cart,onBack}){
             try{latestCart.current.replace(removePurchased(latestCart.current.items,items));}
             catch(failure){sessionStorage.removeItem(`dbm-order-cleared:${sessionId}`);throw failure;}
           }
-          try{const attempt=JSON.parse(sessionStorage.getItem('dbm-checkout-attempt')||'null');if(attempt?.signature===cartSignature(snapshot))sessionStorage.removeItem('dbm-checkout-attempt');}catch{}
+          try{const attempt=JSON.parse(sessionStorage.getItem(test?'dbm-checkout-attempt':'dbm-production-checkout-attempt')||'null');if(attempt?.signature===cartSignature(snapshot))sessionStorage.removeItem(test?'dbm-checkout-attempt':'dbm-production-checkout-attempt');}catch{}
           setOrder(payload);setError('');setChecking(false);return;
         }
         setOrder(payload);setError('');
@@ -44,13 +45,14 @@ export function OrderStatus({cart,onBack}){
       if(attempts<10)timer=setTimeout(poll,2000);else setChecking(false);
     };
     poll();return()=>{active.abort();clearTimeout(timer);};
-  },[sessionId,verificationRun]);
+  },[sessionId,verificationRun,mode]);
   const paid=order&&['paid','fulfilled'].includes(order.status);
-  return <section className="store-page order-preview"><span className="eyebrow">{mock?'Local simulation / No Stripe payment':'Stripe sandbox / Test order'}</span><h1>{paid?(mock?'Simulated order result.':'Test payment verified.'):cancellationReturn?'Checkout closed.':checking?(mock?'Checking the simulated order.':'Verifying your test order.'):'Test order status.'}</h1>
-    <p role="status">{paid?(mock?'The local mock event completed. No Stripe payment was verified and no money was charged.':'The server has verified this test payment. No real money was charged.'):cancellationReturn?'You left test checkout. No paid order has been verified here. Your cart stays saved.':checking?(mock?'Waiting for local simulated server state. Your cart stays saved.':'Waiting for verified server payment state. Your cart stays saved.'):order?.status==='pending'?(mock?'The simulated payment remains pending. Your cart stays saved.':'Verification is still pending. Your cart stays saved.'):(mock?'The simulated order is not paid. Your cart stays saved.':'No paid order has been verified on this screen. Your cart stays saved.')}</p>
+  return <section className="store-page order-preview"><span className="eyebrow">{mock?'Local simulation / No Stripe payment':test?'Stripe sandbox / Test order':'DualBore Media / Order status'}</span><h1>{paid?(mock?'Simulated order result.':test?'Test payment verified.':'Payment confirmed.'):cancellationReturn?'Checkout closed.':checking?(mock?'Checking the simulated order.':test?'Verifying your test order.':'Verifying your order.'):test?'Test order status.':'Your order status.'}</h1>
+    <p role="status">{paid?(mock?'The local mock event completed. No Stripe payment was verified and no money was charged.':test?'The server has verified this test payment. No real money was charged.':'Your payment has been verified. Thank you for backing the garage.'):cancellationReturn?'You left checkout. No paid order has been verified here. Your cart stays saved.':checking?(mock?'Waiting for local simulated server state. Your cart stays saved.':'Waiting for verified server payment state. Your cart stays saved.'):order?.status==='pending'?(mock?'The simulated payment remains pending. Your cart stays saved.':'Verification is still pending. Your cart stays saved.'):(mock?'The simulated order is not paid. Your cart stays saved.':'No paid order has been verified on this screen. Your cart stays saved.')}</p>
     {error&&<p className="form-error" role="alert">{error}</p>}
-    {paid&&<div className="example-order"><h2>Test order {order.orderNumber}</h2><ul>{order.items.map(line=><li key={line.variantId}>{variantById(line.variantId)?.sku} / Quantity {line.quantity} / {money(line.lineTotalCents)}</li>)}</ul><p>Subtotal {money(order.subtotalCents)}</p><p>Shipping {money(order.shippingCents)}</p><p>Tax {money(order.taxCents)}</p><strong>Total {money(order.totalCents)}</strong><p>{mock?'No real order email is sent by this simulation.':order.emailStatus==='sent'?'The server reports that the test order email was sent.':'Order email delivery has not been confirmed.'}</p></div>}
-    {!paid&&!checking&&validSessionId(sessionId)&&(order?.status==='pending'||error)&&<button className="button" onClick={()=>setVerificationRun(value=>value+1)}>Check payment status again</button>}
+    {paid&&<div className="example-order"><h2>{test?"Test order":"Order"} {order.orderNumber}</h2><ul>{order.items.map(line=><li key={line.variantId}>{variantById(line.variantId)?.sku} / Quantity {line.quantity} / {money(line.lineTotalCents)}</li>)}</ul><p>Subtotal {money(order.subtotalCents)}</p><p>Shipping {money(order.shippingCents)}</p><p>Tax {money(order.taxCents)}</p><strong>Total {money(order.totalCents)}</strong><p>{mock?'No real order email is sent by this simulation.':order.emailStatus==='sent'?test?'The server reports that the test order email was sent.':'Your order email was sent.':'Order email delivery has not been confirmed.'}</p></div>}
+    {!paid&&!checking&&validSessionId(sessionId,mode)&&(order?.status==='pending'||error)&&<button className="button" onClick={()=>setVerificationRun(value=>value+1)}>Check payment status again</button>}
+    {paid&&<p><a className="text-link" href="/account">View orders and tracking in My Garage</a></p>}
     <button className="button" onClick={onBack}>Back to the garage store</button>
   </section>;
 }

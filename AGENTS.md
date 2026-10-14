@@ -20,6 +20,12 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 
 ## Durable project decisions
 
+### Latest pre-deployment production-build authorization
+
+- Preserve current local work on codex/commerce-test-foundation. The user now authorizes managed Clerk accounts, MFA administration, production-shaped commerce/fulfillment/support, production resource structure and tested source-only pushes with [skip netlify]. This supersedes older sandbox-only implementation restrictions below, never deployment/main merge/public live payments/marketing broadcasts.
+- PAYMENTS_ENABLED and TRANSACTIONAL_EMAILS_ENABLED are server-only, fail closed, and remain false before explicit cutover. Production database/catalog must be clean and separate, with approved prices/stock. Do not infer final prices from sandbox values or ownership of a planned domain.
+- Use migrations 002+ without editing 001. Keep Sites artifacts and Netlify gates. Real managed auth and production-provider checks remain blockers until actually exercised.
+
 ### Current sandbox implementation decisions
 
 - Continue from the approved local storefront. The user authorized a source-only GitHub development branch backup. Exclude QA artifacts, screenshots and secrets. Do not deploy, trigger previews/build hooks, merge main, add a deploy marker or mutate remote account settings.
