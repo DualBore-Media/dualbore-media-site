@@ -6,6 +6,7 @@ export async function runStorefrontBrowserChecks({page,navigate,reload,baseUrl})
   if(!/^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(baseUrl))throw new Error('Browser checks require a loopback commerce preview.');
   const passed=[];
   const expect=(value,message)=>{if(!value)throw new Error(message);};
+  const estimate=async()=>{await page.getByRole('button',{name:'Check server estimate',exact:true}).click();await page.locator('.quote-success, .cart-estimate .price-review, .cart-scroll > .form-error').waitFor({state:'visible'});};
   const drawerText=()=>page.getByRole('dialog').innerText();
   const close=()=>page.getByRole('button',{name:'Close test cart',exact:true}).press('Escape');
   const fixture=async id=>{
@@ -21,7 +22,7 @@ export async function runStorefrontBrowserChecks({page,navigate,reload,baseUrl})
   await page.getByRole('button',{name:'Open test cart, 1 items',exact:true}).click();
   await page.getByRole('combobox',{name:'Edit size for E92 Coupe Line-Art Tee, M',exact:true}).selectOption('L');
   await page.getByRole('button',{name:'Increase E92 Coupe Line-Art Tee, L',exact:true}).click();
-  await page.getByRole('button',{name:'Check server estimate',exact:true}).click();
+  await estimate();
   expect((await drawerText()).includes('$67.00'),'Server estimate must be $60 plus $7 shipping.');
   passed.push('add without interrupting shopping, edit size, quantity stepper, trusted estimate');
   await reload();
@@ -34,13 +35,13 @@ export async function runStorefrontBrowserChecks({page,navigate,reload,baseUrl})
   await close();passed.push('refresh persistence, keyboard open/close, focus restoration, remove/empty');
   await fixture('changed-price');
   await page.getByRole('button',{name:'Open test cart, 2 items',exact:true}).click();
-  await page.getByRole('button',{name:'Check server estimate',exact:true}).click();
+  await estimate();
   expect((await drawerText()).includes('A TEST PRICE CHANGED.'),'A changed price must require review.');
   await page.getByRole('button',{name:'Accept updated test prices',exact:true}).click();
   expect((await drawerText()).includes('$70.00'),'Accepted $35 test prices must update the subtotal.');
   await close();passed.push('explicit changed-price acceptance');
   for(const [id,expected] of [['sold-out','unavailable in this demo'],['stale-cart','No longer available (demo)'],['network-failure','Estimate service unavailable.'],['shipping-error','Shipping estimate unavailable.'],['tax-error','Tax estimate unavailable.']]){
-    await fixture(id);await page.getByRole('button',{name:'Open test cart, 2 items',exact:true}).click();await page.getByRole('button',{name:'Check server estimate',exact:true}).click();expect((await drawerText()).includes(expected),`Missing ${id} error.`);expect((await drawerText()).includes('No order was created.'),'Failure must not fabricate success.');await close();passed.push(id);
+    await fixture(id);await page.getByRole('button',{name:'Open test cart, 2 items',exact:true}).click();await estimate();expect((await drawerText()).includes(expected),`Missing ${id} error.`);expect((await drawerText()).includes('No order was created.'),'Failure must not fabricate success.');await close();passed.push(id);
   }
   await fixture('low-stock');await page.getByRole('button',{name:'Open test cart, 2 items',exact:true}).click();await page.getByRole('button',{name:'Increase E92 Coupe Line-Art Tee, M',exact:true}).click();expect(!(await page.getByRole('button',{name:'Increase E92 Coupe Line-Art Tee, M',exact:true}).isEnabled()),'Demo stock limit must disable increasing past two.');await close();passed.push('low-stock bound');
   await fixture('in-stock');

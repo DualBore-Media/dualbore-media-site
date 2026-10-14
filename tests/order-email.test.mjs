@@ -67,3 +67,10 @@ test('shipment email failures preserve fulfillment and retry the saved payload s
  const repo=repository(shipped);let time=Date.parse('2026-10-12T12:00:00Z');let calls=[];const input={repository:repo,orderId:order.id,env,now:()=>new Date(time),fetchImpl:async(url,init)=>{calls.push(init);return calls.length===1?new Response('',{status:503}):sent();}};
  await deliverShipmentEmail(input);assert.equal(repo.state.orders[order.id].status,'fulfilled');assert.equal(repo.state.emails['order-1:customer-shipment'].status,'queued');time+=61000;await deliverShipmentEmail(input);assert.equal(calls.length,2);assert.equal(calls[0].body,calls[1].body);assert.equal(calls[0].headers['Idempotency-Key'],calls[1].headers['Idempotency-Key']);
 });
+
+test('real sandbox order and shipment messages cannot be mistaken for live fulfillment',async()=>{
+ const sandbox={...order,sessionId:'cs_test_sandbox'};
+ const confirmation=renderOrderEmail(sandbox);assert.match(confirmation.subject,/^\[TEST\]/);assert.match(confirmation.text,/No real payment was taken/);assert.match(confirmation.html,/Do not ship/);
+ const payloads=[];await deliverOrderEmails({repository:repository(sandbox),orderId:sandbox.id,env:{...env,RESEND_NOTIFY_TO:'merchant@example.com'},fetchImpl:async(url,init)=>{payloads.push(JSON.parse(init.body));return sent();}});assert.ok(payloads.every(p=>/^\[TEST\]/.test(p.subject)));
+ const shipment=renderShipmentEmail({...sandbox,status:'fulfilled',shippedAt:new Date().toISOString(),carrier:'Test carrier',trackingNumber:'TEST-NOT-A-PACKAGE',trackingUrl:'https://example.com/test'});assert.match(shipment.subject,/^\[TEST\]/);assert.match(shipment.text,/No real package was shipped/);
+});

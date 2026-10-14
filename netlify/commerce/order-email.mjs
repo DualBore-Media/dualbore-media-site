@@ -6,28 +6,32 @@ const address = value => typeof value === 'string' && value.length <= 254 && /^[
 const sender = value => address(value) || (typeof value === 'string' && /^[^\r\n<>]+ <[^<>]+>$/.test(value) && address(value.match(/<([^>]+)>$/)?.[1]));
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const clean = value => String(value ?? '').replace(/[\r\n\u0000-\u001f\u007f]/g, ' ').slice(0, 300);
+const sandboxOrder = order => order?.isTest === true || /^cs_test_/.test(order?.sessionId ?? '');
 const amount = (value, currency) => new Intl.NumberFormat('en-US', {style:'currency',currency}).format(value / 100);
 
 export function renderOrderEmail(order) {
   if (!['paid','fulfilled'].includes(order?.status)) throw new Error('Verified paid order required.');
+  const test = sandboxOrder(order);
+  const notice = test ? 'SANDBOX TEST. No real payment was taken. Do not ship this test order.' : '';
   const currency = /^[a-z]{3}$/i.test(order.currency ?? '') ? order.currency.toUpperCase() : 'USD';
   const number = clean(order.orderNumber || order.id);
   const lines = (order.items ?? []).map(item => `${clean(item.name)} | Size ${clean(item.size)} | Qty ${item.quantity} | ${amount(item.lineTotalCents,currency)}`);
   const totals = [['Subtotal',order.subtotalCents],['Shipping',order.shippingCents],['Tax',order.taxCents],['Total',order.totalCents]].map(([label,value])=>`${label}: ${amount(value,currency)}`);
   const shipping = order.shippingAddress ?? {};
   const destination = [order.shippingName,shipping.line1,shipping.line2,[shipping.city,shipping.state,shipping.postal_code ?? shipping.postalCode].filter(Boolean).join(' '),shipping.country].filter(Boolean).map(clean);
-  const text = [`DualBore Media | Order ${number}`, 'Payment confirmed. Thank you for your order.', ...lines, ...totals, 'Ship to:', ...destination, 'This confirms payment, not shipment.'].join('\n');
-  return {subject:`DualBore Media order ${number} confirmed`,text,html:`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Order confirmation</title></head><body style="font-family:Arial,sans-serif;font-size:16px;line-height:1.6;color:#17191d;background:#ffffff"><main style="max-width:600px;margin:auto;padding:24px"><h1>Order ${escape(number)} confirmed</h1><p>Payment confirmed. Thank you for your order.</p><ul>${lines.map(line=>`<li>${escape(line)}</li>`).join('')}</ul>${totals.map(line=>`<p>${escape(line)}</p>`).join('')}<h2>Ship to</h2><p>${destination.map(escape).join('<br>')}</p><p>This confirms payment, not shipment.</p></main></body></html>`};
+  const text = [notice, `DualBore Media | Order ${number}`, 'Payment confirmed. Thank you for your order.', ...lines, ...totals, 'Ship to:', ...destination, 'This confirms payment, not shipment.'].join('\n');
+  return {subject:`${test?'[TEST] ':''}DualBore Media order ${number} confirmed`,text,html:`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Order confirmation</title></head><body style="font-family:Arial,sans-serif;font-size:16px;line-height:1.6;color:#17191d;background:#ffffff"><main style="max-width:600px;margin:auto;padding:24px"><h1>Order ${escape(number)} confirmed</h1>${notice?`<p><strong>${escape(notice)}</strong></p>`:''}<p>Payment confirmed. Thank you for your order.</p><ul>${lines.map(line=>`<li>${escape(line)}</li>`).join('')}</ul>${totals.map(line=>`<p>${escape(line)}</p>`).join('')}<h2>Ship to</h2><p>${destination.map(escape).join('<br>')}</p><p>This confirms payment, not shipment.</p></main></body></html>`};
 }
 
 export function renderShipmentEmail(order) {
   if(order?.status!=='fulfilled'||!order.shippedAt||!order.trackingNumber||!order.carrier)throw new Error('Recorded shipment required.');
+  const test=sandboxOrder(order);const notice=test?'SANDBOX TEST. No real package was shipped. Do not ship this test order.':'';
   const tracking=new URL(order.trackingUrl);
   if(tracking.protocol!=='https:'||tracking.username||tracking.password)throw new Error('Safe tracking URL required.');
   const number=clean(order.orderNumber||order.id);
   const items=(order.items||[]).map(item=>`${clean(item.name)} | Size ${clean(item.size)} | Qty ${item.quantity}`);
-  const text=[`DualBore Media | Shipment for ${number}`,'Your package has been marked as shipped.',...items,`Carrier: ${clean(order.carrier)}`,`Tracking number: ${clean(order.trackingNumber)}`,`Track your package: ${tracking.href}`,'Carrier tracking provides the latest delivery status.'].join('\n');
-  return {subject:`Your DualBore Media order ${number} has shipped`,text,html:`<!doctype html><html lang="en"><body style="font-family:Arial,sans-serif;line-height:1.6"><main><h1>Order ${escape(number)} has shipped</h1><p>Your package has been marked as shipped.</p><ul>${items.map(item=>`<li>${escape(item)}</li>`).join('')}</ul><p>Carrier: ${escape(clean(order.carrier))}<br>Tracking number: ${escape(clean(order.trackingNumber))}</p><p><a href="${escape(tracking.href)}">Track your package</a></p><p>Carrier tracking provides the latest delivery status.</p></main></body></html>`};
+  const text=[notice,`DualBore Media | Shipment for ${number}`,'Your package has been marked as shipped.',...items,`Carrier: ${clean(order.carrier)}`,`Tracking number: ${clean(order.trackingNumber)}`,`Track your package: ${tracking.href}`,'Carrier tracking provides the latest delivery status.'].join('\n');
+  return {subject:`${test?'[TEST] ':''}Your DualBore Media order ${number} has shipped`,text,html:`<!doctype html><html lang="en"><body style="font-family:Arial,sans-serif;line-height:1.6"><main><h1>Order ${escape(number)} has shipped</h1>${notice?`<p><strong>${escape(notice)}</strong></p>`:''}<p>Your package has been marked as shipped.</p><ul>${items.map(item=>`<li>${escape(item)}</li>`).join('')}</ul><p>Carrier: ${escape(clean(order.carrier))}<br>Tracking number: ${escape(clean(order.trackingNumber))}</p><p><a href="${escape(tracking.href)}">Track your package</a></p><p>Carrier tracking provides the latest delivery status.</p></main></body></html>`};
 }
 
 async function sendType({repository,orderId,type,env,fetchImpl,now}) {
@@ -52,7 +56,7 @@ async function sendType({repository,orderId,type,env,fetchImpl,now}) {
     if (!recipient && type === 'merchant-notification') return {status:'not-configured'};
     if (!address(recipient)) return {status:'recipient-invalid'};
     const template = type==='customer-shipment'?renderShipmentEmail(order):renderOrderEmail(order);
-    const payload = previous?.payload ?? {from:env.RESEND_FROM,to:[recipient],...template,...(env.RESEND_REPLY_TO?{reply_to:env.RESEND_REPLY_TO}:{}),...(type==='merchant-notification'?{subject:`Paid order ${clean(order.orderNumber || order.id)} | DualBore Media`}:{})};
+    const payload = previous?.payload ?? {from:env.RESEND_FROM,to:[recipient],...template,...(env.RESEND_REPLY_TO?{reply_to:env.RESEND_REPLY_TO}:{}),...(type==='merchant-notification'?{subject:`${sandboxOrder(order)?'[TEST] ':''}Paid order ${clean(order.orderNumber || order.id)} | DualBore Media`}:{})};
     const row = {...previous,id,orderId,emailType:type,provider:'resend',providerMessageId:previous?.providerMessageId ?? null,status:'sending',attemptCount:(previous?.attemptCount ?? 0)+1,lastError:null,createdAt:previous?.createdAt ?? new Date(timestamp).toISOString(),sentAt:null,firstAttemptAt:previous?.firstAttemptAt ?? new Date(timestamp).toISOString(),leaseToken:token,leaseExpiresAt:new Date(timestamp+leaseMs).toISOString(),retryAfter:null,uncertain:Boolean(previous?.uncertain || previous?.status==='sending'),payload};
     state.emails[id]=row;
     return {status:'claimed',payload,attemptCount:row.attemptCount};

@@ -4,11 +4,13 @@ import {validSessionId,removePurchased,cartSignature} from './checkout-client.js
 
 export function OrderStatus({cart,onBack}){
   const sessionId=new URLSearchParams(window.location.search).get('session_id');
+  const cancellationReturn=window.location.pathname.endsWith('/cancel');
+  const [verificationRun,setVerificationRun]=useState(0);
   const latestCart=useRef(cart);latestCart.current=cart;
   const [order,setOrder]=useState(null);const [error,setError]=useState('');const [checking,setChecking]=useState(true);
   const [mock,setMock]=useState(()=>{try{return sessionStorage.getItem(`dbm-order-mock:${sessionId}`)==='1';}catch{return false;}});
   useEffect(()=>{
-    const active=new AbortController();let timer;let attempts=0;
+    const active=new AbortController();let timer;let attempts=0;setChecking(true);setError('');
     const stop=message=>{setError(message);setChecking(false);};
     if(!validSessionId(sessionId)){stop('No valid test session was provided. Your cart is unchanged.');return()=>active.abort();}
     let token;
@@ -42,12 +44,13 @@ export function OrderStatus({cart,onBack}){
       if(attempts<10)timer=setTimeout(poll,2000);else setChecking(false);
     };
     poll();return()=>{active.abort();clearTimeout(timer);};
-  },[sessionId]);
+  },[sessionId,verificationRun]);
   const paid=order&&['paid','fulfilled'].includes(order.status);
-  return <section className="store-page order-preview"><span className="eyebrow">{mock?'Local simulation / No Stripe payment':'Stripe sandbox / Test order'}</span><h1>{paid?(mock?'Simulated order result.':'Test payment verified.'):checking?(mock?'Checking the simulated order.':'Verifying your test order.'):'Test order status.'}</h1>
-    <p role="status">{paid?(mock?'The local mock event completed. No Stripe payment was verified and no money was charged.':'The server has verified this test payment. No real money was charged.'):checking?(mock?'Waiting for local simulated server state. Your cart stays saved.':'Waiting for verified server payment state. Your cart stays saved.'):order?.status==='pending'?(mock?'The simulated payment remains pending. Your cart stays saved.':'Verification is still pending. Your cart stays saved.'):(mock?'The simulated order is not paid. Your cart stays saved.':'No paid order has been verified on this screen. Your cart stays saved.')}</p>
+  return <section className="store-page order-preview"><span className="eyebrow">{mock?'Local simulation / No Stripe payment':'Stripe sandbox / Test order'}</span><h1>{paid?(mock?'Simulated order result.':'Test payment verified.'):cancellationReturn?'Checkout closed.':checking?(mock?'Checking the simulated order.':'Verifying your test order.'):'Test order status.'}</h1>
+    <p role="status">{paid?(mock?'The local mock event completed. No Stripe payment was verified and no money was charged.':'The server has verified this test payment. No real money was charged.'):cancellationReturn?'You left test checkout. No paid order has been verified here. Your cart stays saved.':checking?(mock?'Waiting for local simulated server state. Your cart stays saved.':'Waiting for verified server payment state. Your cart stays saved.'):order?.status==='pending'?(mock?'The simulated payment remains pending. Your cart stays saved.':'Verification is still pending. Your cart stays saved.'):(mock?'The simulated order is not paid. Your cart stays saved.':'No paid order has been verified on this screen. Your cart stays saved.')}</p>
     {error&&<p className="form-error" role="alert">{error}</p>}
     {paid&&<div className="example-order"><h2>Test order {order.orderNumber}</h2><ul>{order.items.map(line=><li key={line.variantId}>{variantById(line.variantId)?.sku} / Quantity {line.quantity} / {money(line.lineTotalCents)}</li>)}</ul><p>Subtotal {money(order.subtotalCents)}</p><p>Shipping {money(order.shippingCents)}</p><p>Tax {money(order.taxCents)}</p><strong>Total {money(order.totalCents)}</strong><p>{mock?'No real order email is sent by this simulation.':order.emailStatus==='sent'?'The server reports that the test order email was sent.':'Order email delivery has not been confirmed.'}</p></div>}
+    {!paid&&!checking&&validSessionId(sessionId)&&(order?.status==='pending'||error)&&<button className="button" onClick={()=>setVerificationRun(value=>value+1)}>Check payment status again</button>}
     <button className="button" onClick={onBack}>Back to the garage store</button>
   </section>;
 }

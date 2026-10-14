@@ -1,0 +1,14 @@
+import test from 'node:test';import assert from 'node:assert/strict';import pg from 'pg';import{randomBytes}from'node:crypto';import{fork}from'node:child_process';import{fileURLToPath}from'node:url';
+import{createPostgresRepository,runMigrations}from'../netlify/commerce/repository.mjs';import{seedTestCatalog}from'../netlify/commerce/catalog.mjs';
+// Explicit opt-in. Tests use only a generated schema in the dedicated local sandbox.
+test('real PostgreSQL migrations, counters and cross-process last-unit checkout locking',{skip:process.env.DBM_REAL_POSTGRES_TEST!=='true',timeout:30000},async()=>{
+ const url=new URL(process.env.DATABASE_URL);assert.equal(url.hostname,'127.0.0.1');assert.equal(url.pathname,'/dbm_sandbox');
+ const schema='dbm_qa_'+randomBytes(8).toString('hex');const admin=new pg.Pool({connectionString:process.env.DATABASE_URL});let pool;const children=[];
+ try{await admin.query('CREATE SCHEMA '+schema);pool=new pg.Pool({connectionString:process.env.DATABASE_URL,options:'-c search_path='+schema,max:3});await runMigrations(pool);const repo=createPostgresRepository(pool);await seedTestCatalog(repo,{quantity:1});await repo.transaction(s=>{s.variants['e92-tee-m'].stripePriceId='price_race';});
+  assert.equal((await pool.query('SELECT count(*)::int n FROM product_variants')).rows[0].n,15);
+  for(const table of ['orders','order_items','inventory_reservations','stripe_events','email_events'])assert.equal((await pool.query('SELECT count(*)::int n FROM '+table)).rows[0].n,0);
+  const work=[0,1].map(()=>{const child=fork(fileURLToPath(new URL('./fixtures/postgres-race-worker.mjs',import.meta.url)),[],{env:{...process.env,DBM_QA_SCHEMA:schema},execArgv:[],stdio:['ignore','ignore','ignore','ipc']});children.push(child);let readyResolve,resultResolve,resultReject;const ready=new Promise(r=>readyResolve=r),result=new Promise((r,j)=>{resultResolve=r;resultReject=j;});child.on('message',m=>m.ready?readyResolve():resultResolve(m));child.on('error',resultReject);child.on('exit',code=>{if(code)resultReject(Error('Worker failed.'));});return{child,ready,result};});
+  await Promise.all(work.map(w=>w.ready));for(const w of work)w.child.send('go');const results=await Promise.all(work.map(w=>w.result));assert.equal(results.filter(r=>r.success).length,1);assert.equal(results.filter(r=>!r.success&&r.code==='insufficient_stock').length,1);
+  const state=await repo.transaction(s=>s),v=state.variants['e92-tee-m'];assert.deepEqual([v.availableQuantity,v.reservedQuantity,v.soldQuantity],[0,1,0]);assert.equal(Object.keys(state.orders).length,1);assert.equal(Object.values(state.reservations).filter(r=>r.status==='reserved').length,1);
+ }finally{for(const child of children)child.kill();await pool?.end();await admin.query('DROP SCHEMA '+schema+' CASCADE');await admin.end();}
+});

@@ -9,8 +9,20 @@ export { emptyState, initialEmptyState } from './memory-repository.mjs';
 // over throughput; replace with row-scoped services before high-volume scaling.
 const lockSql = 'SELECT pg_advisory_xact_lock(17460290, 1)';
 const migrationDirectory = new URL('../../migrations/', import.meta.url);
+const protectedPools = new WeakSet();
+// pg emits errors for idle clients outside a query promise. Handle them without
+// exposing the Error/client object; pg removes the failed connection itself.
+export function protectPool(pool, log = code => console.warn('[commerce-database]', code)) {
+  if (typeof pool.on === 'function' && !protectedPools.has(pool)) {
+    pool.on('error', () => log('idle_connection_lost'));
+    protectedPools.add(pool);
+  }
+  return pool;
+}
+
 
 export async function runMigrations(pool, directory = migrationDirectory) {
+  protectPool(pool);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -95,6 +107,7 @@ async function persist(client, state) {
 }
 
 export function createPostgresRepository(pool) {
+  protectPool(pool);
   return {
     async transaction(callback) {
       const client = await pool.connect();

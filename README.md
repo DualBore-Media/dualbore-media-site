@@ -175,3 +175,22 @@ Sources checked: [Netlify ignore builds](https://docs.netlify.com/build/configur
 ### Shipment notifications
 
 The internal fulfillment service now sends a separate customer shipment email after a paid order is recorded as fulfilled with carrier, tracking number, HTTPS tracking URL and shipped timestamp. It includes product/size/quantity details and a tracking link, with escaped HTML and plain text. A separate durable customer-shipment email event and idempotency key prevent repeated fulfillment calls from duplicating the notification. Email failure never undoes fulfillment; orders:recover retries missing/retryable shipment notices. Mock orders never send real email. There is no public fulfillment endpoint or admin GUI yet; shipment must be recorded through the trusted service. Actual sending still requires the verified Resend server configuration.
+
+
+## Marketing consent and future unsubscribe handling
+
+Purchases and shipment notices never subscribe an address to marketing. Drop 01 signup is optional; its consent checkbox starts unchecked and is required only when joining that list. Transactional order and shipment messages must remain separate from promotional campaigns.
+
+Before sending marketing campaigns, implement and test a durable suppression list keyed by normalized email, record consent timestamp/source/version, and honor unsubscribe requests before each send or export. Provide a working unsubscribe link and appropriate one-click headers through the selected campaign provider. Process provider unsubscribe events idempotently and retain suppression across imports and retries. A later purchase must never clear suppression; renewed marketing enrollment requires a fresh explicit opt-in. Confirm the business mailing address and monitored support/opt-out inbox first.
+
+This is the required future architecture, not a claim that an unsubscribe endpoint or campaign system exists. Marketing campaigns remain blocked until it is implemented and verified. Order confirmations and shipping notices contain no promotional enrollment.
+
+## Sandbox launch-candidate verification (October 13, 2026)
+
+The isolated local PostgreSQL 17 database was migrated and seeded with 15 variants. The existing Stripe sandbox was synced twice without duplicate DBM mappings. Two real hosted test-card payments, a declined card, cancellation, signed completed/expired events, delayed delivery, invalid signatures and duplicate processing were exercised. Resend reported delivered owner-only test confirmation, merchant, shipment and waitlist messages. A branded verified sender and production policies remain launch blockers. Hosted Netlify Forms delivery was not tested or deployed; the email core received a synthetic validated event for that delivery test.
+
+Run `npm run test:postgres` with `DBM_REAL_POSTGRES_TEST=true` and a private local DATABASE_URL for database `dbm_sandbox` on 127.0.0.1. This opt-in test creates a random isolated schema, applies the real migration and launches two independent checkout workers against the final unit. The workers use a Stripe boundary double to isolate database locking; the hosted card/payment tests used real Stripe separately. The generated QA schema is removed afterward. Never point this test at production. Without the opt-in it is explicitly skipped, not counted as database proof.
+
+Verified failure QA found and fixed unsafe idle database error handling. Idle disconnects now log only a generic code, allow reconnection and preserve carts on checkout failure. Sandbox transactional subjects and bodies identify test orders and warn against shipping. Cancellation returns explain that checkout closed, and bounded payment verification can be restarted without creating another checkout. Test credentials and local database/tooling remain ignored; no customer payments, deployment, main merge or PR are enabled by these checks.
+
+Alternative payment methods and real asynchronous settlement were not exercised; async success/failure transitions remain covered by automated boundary tests. Browser QA covers Chromium and all seven requested viewport widths, with keyboard and reduced-motion checks. Production approvals, sender verification, tax, operations and broader browser/device checks remain required before launch.

@@ -10,16 +10,20 @@ export async function syncTestCatalog({repository,stripe}){
  if(products.has_more)throw new Error('Catalog pagination review required. Refusing duplicate-prone sync.');
  const mapped={};
  for(const v of variants){
-  let product=mapped[v.productId]||products.data.find(p=>p.metadata?.dbm_product_id===v.productId&&p.metadata?.dbm_environment==='test');
+  const matchingProducts=products.data.filter(p=>p.metadata?.dbm_product_id===v.productId&&p.metadata?.dbm_environment==='test');
+  if(matchingProducts.length>1)throw new Error('Ambiguous product mapping. Review duplicate test products before syncing.');
+  let product=mapped[v.productId]||matchingProducts[0];
   if(product?.livemode)throw new Error('Live product refused.');
   if(!product)product=await stripe.products.create({name:'[TEST] '+v.name,metadata:{dbm_product_id:v.productId,dbm_environment:'test'}},{idempotencyKey:'dbm-test-product-'+v.productId});
   mapped[v.productId]=product;
   const prices=await stripe.prices.list({product:product.id,active:true,limit:100});
   if(prices.has_more)throw new Error('Price pagination review required.');
-  let price=prices.data.find(p=>!p.livemode&&p.currency==='usd'&&p.unit_amount===v.priceCents&&p.metadata?.dbm_variant_id===v.id);
+  const matchingPrices=prices.data.filter(p=>!p.livemode&&p.currency==='usd'&&p.unit_amount===v.priceCents&&p.metadata?.dbm_variant_id===v.id);
+  if(matchingPrices.length>1)throw new Error('Ambiguous price mapping. Review duplicate test prices before syncing.');
+  let price=matchingPrices[0];
   if(!price)price=await stripe.prices.create({product:product.id,unit_amount:v.priceCents,currency:'usd',tax_behavior:'exclusive',metadata:{dbm_variant_id:v.id,dbm_environment:'test'}},{idempotencyKey:`dbm-test-price-${v.id}-${v.priceCents}`});
   if(price.livemode)throw new Error('Live price refused.');
-  await repository.transaction(s=>{const current=s.variants[v.id];if(current.priceCents!==v.priceCents)throw new Error('Catalog changed during sync.');current.stripePriceId=price.id;});
+  await repository.transaction(s=>{const current=s.variants[v.id];if(current.priceCents!==v.priceCents)throw new Error('Catalog changed during sync.');current.stripePriceId=price.id;current.stripeProductId=product.id;});
  }
  return{variants:variants.length,products:Object.keys(mapped).length};
 }
